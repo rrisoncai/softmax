@@ -2,7 +2,6 @@ $$
 \Huge
 \text{softmax}(x)_i = \frac{e^{x_i}}{\sum_{j=1}^N e^{x_j}}
 $$
-蔡晓东，2026.1.8
 
 Table of Contents
 =================
@@ -319,4 +318,3 @@ $$
 - FlashAttention 是 **Softmax 可结合性 + 矩阵乘法 tiling**
   在现代 GPU 架构下的结果。
 
-Created by 蔡晓东，2026.1.8
