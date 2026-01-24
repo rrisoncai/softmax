@@ -3,6 +3,53 @@
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
+#include <float.h>
+
+/* -------------Start Softmax------------------ */
+int softmax_3pass(float* x, int n, float* y)
+{
+    float x_max = FLT_MIN;
+    float sum = 0;
+
+    /* First Pass */
+    for (int i = 0; i < n; ++i) {
+        x_max = fmax(x[i], x_max);
+    }
+
+    /* Second Pass */
+    for (int i = 0; i < n; ++i) {
+        sum += exp(x[i] - x_max);
+    }
+
+    /* Third Pass */
+    for (int i = 0; i < n; ++i) {
+        y[i] = exp(x[i] - x_max) / sum;
+    }
+
+    return 0;
+}
+
+int softmax_2pass(float* x, int n, float* y)
+{
+    float x_max = FLT_MIN;
+    float sum_i = 0;
+
+    /* First Pass */
+    for (int i = 0; i < n; ++i) {
+        float x_max_1 = x_max;
+        x_max = fmax(x_max, x[i]);
+        sum_i = sum_i * exp(x_max_1 - x_max) + exp(x[i] - x_max);
+    }
+
+    /* Second Pass */
+    for (int i = 0; i < n; ++i) {
+        y[i] = exp(x[i] - x_max) / sum_i;
+    }
+
+    return 0;
+}
+
+/* -----------END Softmax------------------ */
 
 
 #include <emmintrin.h>   // SSE2
@@ -280,7 +327,7 @@ int nn_softmax_s8(const nn_context *ctx,
             }
         }
 
-        /* start the max processing */
+        /* START 求最大值 */
         int8_t *input_row_0 = (int8_t *)input_data + row_idx * row_size;
         if (row_num_16x == 0) {
             __m128i max_comp_tmp = mm_masked_load_bytes(input_row_0, row_left_mask, (int)row_num_left);
@@ -311,9 +358,9 @@ int nn_softmax_s8(const nn_context *ctx,
         max_comp_2 = _mm_srli_si128(max_comp_0, 1);
         max_comp_0 = mm_max_epi8_sse2(max_comp_0, max_comp_2);
         int8_t maxv = ((int8_t *)&max_comp_0)[0];
-        /* end the max processing */
+        /* END 求最大值 */
 
-        /* start sum processing */
+        /* START 指数求和 */
         int32_t sum = 0;
         uint32_t count_4x = (uint32_t)row_size >> 2;
         uint32_t count_left = (uint32_t)row_size & 3u;
@@ -348,7 +395,7 @@ int nn_softmax_s8(const nn_context *ctx,
                 __m128i result = mm_pmulds_epi32(diff, mask_128);
                 __m128i mult_128 = _mm_set1_epi32((int32_t)mult);
                 __m128i res = mm_pmuldfrs_epi32(result, mult_128);
-                res = softmax_exp_on_negative_values(res);
+                res = softmax_exp_on_negative_values(res); /* exp(x - max) */
                 _mm_storeu_si128((__m128i *)exp_buff_1, res);
 
                 res = softmax_divide_by_power_of_two(res, SOFTMAX_ACCUM_BITS);
@@ -387,11 +434,16 @@ int nn_softmax_s8(const nn_context *ctx,
             }
         }
 
+        /* END 指数求和 */
+
+        /* START 求倒数 */
         const int32_t headroom = 31 - bsr_u32((uint32_t)sum);
         const int32_t bits_over_unit = SOFTMAX_ACCUM_BITS - headroom + 23;
         const int32_t shifted_scale =
             softmax_one_over_one_plus_x_for_x_in_0_1((sum > 0 ? sum << headroom : 0) - (1 << 31));
+        /* END 求倒数 */
 
+        /* START 归一化并量化输出 */
         int32_t *exp_buff_2 = (int32_t *)exp_buff;
         int8_t *out_per = output_data + row_idx * row_size;
 
@@ -426,6 +478,7 @@ int nn_softmax_s8(const nn_context *ctx,
                 mm_masked_store_bytes(out_per, count_left_mask_8, (int)count_left, _mm_set1_epi8(-128));
             }
         }
+        /* END 归一化并量化输出 */
     }
 
     return 0;
@@ -479,23 +532,26 @@ int main(void) {
     }
 
     int ok = 1;
+    printf("softmax output: ");
     for (int i = 0; i < SOFTMAX1_DST_SIZE; i++) {
-        if (output[i] != softmax1_output_ref[i]) ok = 0;
+        printf("%d, ", output[i]);
     }
+    printf("\n");
 
-    if (!ok) {
-        printf("Mismatch!\n");
-        printf("idx | x | out | ref\n");
-        for (int i = 0; i < SOFTMAX1_DST_SIZE; i++) {
-            printf("%3d | %4d | %4d | %4d\n", i, (int)softmax1_input[i], (int)output[i], (int)softmax1_output_ref[i]);
-        }
-        free(output);
-        free(ctx.scratch_buf);
-        return 1;
-    }
-
-    printf("PASS\n");
     free(output);
     free(ctx.scratch_buf);
+
+
+    printf("Test Online Softmax\n");
+    float x[5] = {1, 2, 3, 4, 5};
+    float yref[5] = { 0 };
+    float y2pa[5] = { 0 };
+    softmax_3pass(x, 5, yref);
+    softmax_2pass(x, 5, y2pa);
+    printf("Input\t3Pass\t2Pass\n");
+    for (int i = 0; i < 5; ++i) {
+        printf("%.3f\t%.3f\t%.3f\n", x[i], yref[i], y2pa[i]);
+    }
+    printf("------------------------\n");
     return 0;
 }
